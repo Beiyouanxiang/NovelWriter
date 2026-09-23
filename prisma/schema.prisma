@@ -1,0 +1,184 @@
+// NovelWriter 数据模型
+// PostgreSQL + Prisma。运行 `npm run db:migrate` 应用迁移。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// 枚举
+// ---------------------------------------------------------------------------
+
+enum MemberRole {
+  owner
+  editor
+  viewer
+}
+
+// ---------------------------------------------------------------------------
+// 账号
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships      WorkspaceMember[]
+  ownedWorkspaces  Workspace[]
+  revisions        Revision[]
+  syncOps          SyncOperation[]
+}
+
+// ---------------------------------------------------------------------------
+// 工作区与成员
+// ---------------------------------------------------------------------------
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  WorkspaceMember[]
+  novels   Novel[]
+  syncOps  SyncOperation[]
+
+  @@index([ownerId])
+}
+
+model WorkspaceMember {
+  id          String     @id @default(cuid())
+  workspaceId String
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        MemberRole @default(editor)
+  createdAt   DateTime   @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// 小说与章节
+// ---------------------------------------------------------------------------
+
+model Novel {
+  id          String    @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title       String    @default("")
+  genre       String    @default("")
+  summary     String    @default("")
+  style       String    @default("")
+  worldview   String    @default("")
+  characters  String    @default("")
+  outline     String    @default("")
+  revision    Int       @default(1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  chapters Chapter[]
+  sessions ChatSession[]
+
+  @@index([workspaceId, updatedAt])
+}
+
+model Chapter {
+  id          String    @id @default(cuid())
+  novelId     String
+  novel       Novel     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  title       String    @default("")
+  content     String    @default("")
+  chapterGoal String    @default("")
+  sortOrder   Int       @default(0)
+  revision    Int       @default(1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  @@index([novelId, updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// 对话
+// ---------------------------------------------------------------------------
+
+model ChatSession {
+  id        String    @id @default(cuid())
+  novelId   String
+  novel     Novel     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  chapterId String?
+  provider  String    @default("deepseek")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  messages ChatMessage[]
+
+  @@index([novelId])
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String // "user" | "assistant"
+  content   String
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+// ---------------------------------------------------------------------------
+// 版本历史
+// ---------------------------------------------------------------------------
+
+model Revision {
+  id         String   @id @default(cuid())
+  entityType String // "novel" | "chapter"
+  entityId   String
+  revision   Int
+  snapshot   Json?
+  patch      Json?
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([entityType, entityId, revision])
+  @@index([entityType, entityId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// 同步操作（幂等 + 审计）
+// ---------------------------------------------------------------------------
+
+model SyncOperation {
+  id           String    @id @default(cuid())
+  operationId  String    @unique // 客户端 UUID，幂等去重
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  entityType   String
+  entityId     String
+  operation    String // "upsert" | "delete"
+  payload      Json?
+  baseRevision Int       @default(0)
+  createdAt    DateTime  @default(now())
+  appliedAt    DateTime?
+
+  @@index([workspaceId, entityType, entityId])
+  @@index([workspaceId, createdAt])
+}

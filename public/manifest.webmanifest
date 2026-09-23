@@ -1,0 +1,17 @@
+{
+  "name": "小说创作工作台",
+  "short_name": "小说工作台",
+  "description": "本地优先、支持协作的中文小说创作工作台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f3ec",
+  "theme_color": "#f6f3ec",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

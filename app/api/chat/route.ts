@@ -1,23 +1,21 @@
+import { z } from "zod";
+import { prisma } from "@/lib/db/prisma";
 import { getRuntime } from "@/lib/runtime/runtime";
 import { buildSystemPrompt } from "@/lib/novel/prompt";
-import { validateChatRequest, LIMITS } from "@/lib/novel/validate";
 import { checkRateLimit } from "@/lib/server/rate-limit";
-import { readBodyWithLimit } from "@/lib/server/body-limit";
 import { getClientIp } from "@/lib/server/client-ip";
-import type { NovelAgentEvent, NovelAgentInput } from "@/lib/novel/types";
+import { getSession } from "@/lib/server/auth-context";
+import { requireRole } from "@/lib/server/permissions";
+import { requireCsrf } from "@/lib/server/http";
+import { readBodyWithLimit } from "@/lib/server/body-limit";
+import type { NovelSettings, ManuscriptState, NovelAgentEvent, NovelAgentInput } from "@/lib/novel/types";
 
 /**
  * POST /api/chat
  *
- * 服务端唯一的大模型入口。前端不得直接调用厂商 API，
- * API Key 只存在于服务端环境变量，绝不进入浏览器、localStorage、日志或响应。
- *
- * 安全：
- * - 可选访问口令（NOVEL_ACCESS_TOKEN），未配置则跳过
- * - 单 IP 与全局的分钟/每日限流，超限返回 429 + Retry-After
- * - 增量读取请求体，超过上限立即取消
- *
- * 支持流式响应（SSE）与 AbortSignal（停止生成）。
+ * 服务端唯一的大模型入口。要求登录 + 工作区成员（editor 及以上）。
+ * 从数据库加载小说设定与章节正文组装 Prompt，不信任客户端传入的作品内容。
+ * API Key 只存在于服务端环境变量。
  */
 
 export const runtime = "nodejs";
@@ -31,6 +29,21 @@ const SSE_HEADERS = {
   "X-Accel-Buffering": "no",
 };
 
+const chatSchema = z.object({
+  provider: z.string().min(1).max(32),
+  novelId: z.string().min(1).max(64),
+  chapterId: z.string().max(64).optional(),
+  instruction: z.string().min(1).max(20000),
+  recentMessages: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(20000),
+      })
+    )
+    .max(40),
+});
+
 function getAllowedProviders(): string[] {
   return (process.env.LLM_ALLOWED_PROVIDERS || "deepseek,kimi")
     .split(",")
@@ -38,85 +51,96 @@ function getAllowedProviders(): string[] {
     .filter(Boolean);
 }
 
-function jsonError(
-  status: number,
-  message: string,
-  extraHeaders?: Record<string, string>
-): Response {
+function jsonError2(status: number, message: string, headers?: Record<string, string>) {
   return new Response(JSON.stringify({ error: message }), {
     status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      ...extraHeaders,
-    },
+    headers: { "Content-Type": "application/json; charset=utf-8", ...headers },
   });
 }
 
-/** 可选访问口令校验：未配置 NOVEL_ACCESS_TOKEN 时跳过 */
-function checkAccessToken(request: Request): Response | null {
-  const token = process.env.NOVEL_ACCESS_TOKEN;
-  if (!token) return null;
-  const provided = request.headers.get("x-access-token");
-  if (provided !== token) {
-    return jsonError(401, "未授权：缺少或错误的访问口令");
-  }
-  return null;
-}
-
 export async function POST(request: Request) {
-  // 1) 访问控制：可选访问口令
-  const authError = checkAccessToken(request);
-  if (authError) return authError;
+  // 1) 登录校验
+  const session = await getSession();
+  if (!session) return jsonError2(401, "未登录");
 
-  // 2) 限流：单 IP + 全局（分钟/每日）
+  // 2) CSRF
+  const csrf = requireCsrf(request);
+  if (csrf) return csrf;
+
+  // 3) 限流
   const ip = getClientIp(request);
   const rate = checkRateLimit(ip);
   if (!rate.allowed) {
-    return jsonError(429, rate.reason || "请求过于频繁，请稍后再试", {
+    return jsonError2(429, rate.reason || "请求过于频繁，请稍后再试", {
       "Retry-After": String(rate.retryAfterSeconds),
     });
   }
 
-  // 3) 请求体大小校验（增量读取，超限立即取消）
-  const text = await readBodyWithLimit(request, LIMITS.MAX_BODY_SIZE);
-  if (text === null) {
-    return jsonError(413, "请求体过大");
-  }
+  // 4) 读取并校验请求体
+  const text = await readBodyWithLimit(request, 2 * 1024 * 1024);
+  if (text === null) return jsonError2(413, "请求体过大");
 
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    return jsonError(400, "请求体不是合法的 JSON");
+    return jsonError2(400, "请求体不是合法的 JSON");
+  }
+  const parsed = chatSchema.safeParse(body);
+  if (!parsed.success) return jsonError2(400, "请求参数不合法");
+
+  const { provider, novelId, chapterId, instruction, recentMessages } = parsed.data;
+
+  // 5) 校验 provider 白名单
+  const providerName = provider.toLowerCase();
+  if (!getAllowedProviders().includes(providerName)) {
+    return jsonError2(400, `不支持的 provider：${provider}`);
   }
 
-  // 4) 结构与内容校验
-  const result = validateChatRequest(body, getAllowedProviders());
-  if (!result.ok || !result.value) {
-    return jsonError(400, result.error || "请求校验失败");
+  // 6) 从数据库加载小说与章节，校验成员身份（editor）
+  const novel = await prisma.novel.findUnique({ where: { id: novelId } });
+  if (!novel || novel.deletedAt) return jsonError2(404, "小说不存在");
+
+  const perm = await requireRole(novel.workspaceId, session.sub, "editor");
+  if (!perm.ok) return jsonError2(perm.status, perm.error);
+
+  const chapter = chapterId
+    ? await prisma.chapter.findUnique({ where: { id: chapterId } })
+    : null;
+  if (chapterId && (!chapter || chapter.deletedAt || chapter.novelId !== novelId)) {
+    return jsonError2(404, "章节不存在");
   }
 
-  const { provider, context, instruction } = result.value;
+  // 7) 组装服务端 Prompt（来自数据库，不信任客户端）
+  const settings: NovelSettings = {
+    title: novel.title,
+    genre: novel.genre,
+    summary: novel.summary,
+    style: novel.style,
+    worldview: novel.worldview,
+    characters: novel.characters,
+    outline: novel.outline,
+    chapterGoal: chapter?.chapterGoal ?? "",
+  };
+  const manuscript: ManuscriptState = {
+    chapterTitle: chapter?.title ?? "",
+    content: chapter?.content ?? "",
+  };
+  const systemPrompt = buildSystemPrompt(settings, manuscript);
 
-  // 5) 组装服务端 Prompt
-  const systemPrompt = buildSystemPrompt(context.settings, context.manuscript);
-
-  // 6) 构造 Runtime 输入（模型 ID 由 Runtime 从环境变量读取）
   const input: NovelAgentInput = {
-    session: {
-      messages: context.recentMessages,
-    },
+    session: { messages: recentMessages },
     prompt: systemPrompt,
     instruction,
-    model: {
-      provider: provider.toLowerCase(),
-      // 模型 ID 不在此处指定，由 DirectApiRuntime 从 DEEPSEEK_MODEL / KIMI_MODEL 读取
-      modelId: "",
+    model: { provider: providerName, modelId: "" },
+    novelContext: {
+      settings,
+      manuscript,
+      recentMessages,
     },
-    novelContext: context,
   };
 
-  // 7) 选择 Runtime 并流式返回
+  // 8) 流式返回
   const runtime = getRuntime();
   const encoder = new TextEncoder();
 
@@ -128,9 +152,7 @@ export async function POST(request: Request) {
       try {
         for await (const event of runtime.run(input, request.signal)) {
           send(event);
-          if (event.type === "done" || event.type === "error") {
-            break;
-          }
+          if (event.type === "done" || event.type === "error") break;
         }
       } catch (err) {
         send({

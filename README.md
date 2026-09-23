@@ -1,172 +1,99 @@
 # NovelWriter · 小说创作工作台
 
-一个与 AI 协作的中文长篇小说创作工具。桌面端三栏工作台（作品设定 / AI 对话 / 正文编辑器），移动端自适应；第一版使用 `localStorage` 保存作品，无需数据库与登录系统。
+本地优先、支持协作的中文长篇小说创作工具。刷新、断网、请求失败都不易丢失已输入内容；登录后支持跨设备同步、创建工作区并邀请协作者。
 
 ## 技术栈
 
-- **Next.js 15**（App Router）
-- **TypeScript**
-- **React 19**
-- **Tailwind CSS 3**
+- **Next.js 15**（App Router）+ **TypeScript** + **React 19** + **Tailwind CSS 3**
+- **Prisma** + **PostgreSQL**（正式数据源，非内存存储）
+- **IndexedDB**（本地优先持久化）+ **PWA**（离线可用）
+- 认证：bcrypt 密码哈希 + JWT（`jose`）HttpOnly Cookie + CSRF
 
-## 功能特性
+## 核心能力
 
-### 1. 小说项目设定
-小说名称、类型、故事简介、写作风格、世界观、主要人物、故事大纲、当前章节目标，全部自动保存到 `localStorage`。
-
-### 2. AI 对话区
-- 支持 **DeepSeek** 与 **Kimi**，可随时切换 Provider
-- 多轮对话 + 流式输出（SSE）
-- 支持停止生成、重新生成、清空对话
-- 快捷操作：续写正文 / 润色 / 扩写 / 改写对白 / 检查剧情逻辑 / 生成章节大纲
-
-### 3. 正文编辑器
-章节标题、正文编辑、实时字数统计、将 AI 回复追加/替换到正文、复制正文、导出 Markdown。
-
-### 4. 页面设计
-页面名「小说创作工作台」，桌面三栏、移动端标签切换，中文界面，简洁沉浸、适合长时间写作。
+- **账号与认证**：注册 / 登录 / 退出，HttpOnly+Secure+SameSite Cookie，CSRF 防护，登录注册限流
+- **工作区与协作**：创建工作区、邀请（按邮箱）、成员角色 owner/editor/viewer、权限服务端校验
+- **本地优先保存**：输入即时更新 React 状态 → 300–500ms 防抖写 IndexedDB → 模糊/离开页立即 flush；刷新后从 IndexedDB 恢复；localStorage 旧数据一次性迁移
+- **离线与 PWA**：缓存应用壳，断网可编辑，离线操作入队，联网自动同步，AI 请求离线时禁用
+- **跨设备同步**：operation 幂等 + revision 冲突检测（章节正文冲突保留本地版与服务端版）+ 游标增量拉取 + 软删除墓碑
+- **版本历史**：小说设定与章节正文自动快照，预览/恢复，保留最近 30 版
+- **AI 对话**：DeepSeek / Kimi 切换、流式输出、停止/重新生成/清空、6 个快捷操作，绑定小说与章节
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 数据库
+
+```bash
+docker compose up -d          # 起 PostgreSQL（或自建）
+```
+
+### 2. 环境变量
+
+```bash
+cp .env.example .env
+# 必填：DATABASE_URL、JWT_SECRET（openssl rand -hex 32）、DEEPSEEK_API_KEY 或 KIMI_API_KEY
+```
+
+### 3. 安装 + 迁移 + 构建
 
 ```bash
 npm install
-```
-
-### 2. 配置环境变量
-
-复制 `.env.example` 为 `.env.local`，并填入真实值：
-
-```bash
-cp .env.example .env.local
-```
-
-| 变量 | 说明 | 必填 |
-| --- | --- | --- |
-| `DEEPSEEK_API_KEY` | DeepSeek API Key | 使用 DeepSeek 时必填 |
-| `DEEPSEEK_MODEL` | DeepSeek 模型 ID（如 `deepseek-chat`） | 使用 DeepSeek 时必填 |
-| `DEEPSEEK_BASE_URL` | DeepSeek 接口地址 | 可选，默认 `https://api.deepseek.com` |
-| `KIMI_API_KEY` | Kimi（Moonshot）API Key | 使用 Kimi 时必填 |
-| `KIMI_MODEL` | Kimi 模型 ID（如 `moonshot-v1-8k`） | 使用 Kimi 时必填 |
-| `KIMI_BASE_URL` | Kimi 接口地址 | 可选，默认 `https://api.moonshot.ai/v1` |
-| `LLM_TIMEOUT_MS` | 单次请求超时（毫秒） | 可选，默认 `30000` |
-| `LLM_ALLOWED_PROVIDERS` | 允许的 provider 列表 | 可选，默认 `deepseek,kimi` |
-| `NOVEL_RUNTIME` | 运行模式：`direct` 或 `harness` | 可选，默认 `direct` |
-| `NOVEL_ACCESS_TOKEN` | 服务端访问口令（设置后前端需填入相同值，否则 401） | 可选，默认空（不校验） |
-| `TRUSTED_IP_HEADER` | 可信代理头（默认空=不信任客户端头，见下） | 可选，默认空 |
-| `NOVEL_RATE_IP_PER_MINUTE` / `_PER_DAY` | 单 IP 分钟/每日额度 | 可选，默认 `30` / `300` |
-| `NOVEL_RATE_GLOBAL_PER_MINUTE` / `_PER_DAY` | 全局分钟/每日额度 | 可选，默认 `120` / `5000` |
-| `NOVEL_RATE_MAX_IP_ENTRIES` | IP 窗口最大条目数 | 可选，默认 `10000` |
-| `NOVEL_RATE_LIMIT_DISABLED` | 设为 `1` 关闭限流 | 可选，默认空（启用） |
-
-> **安全说明**：API Key 只保存在服务端环境变量中，前端通过 `/api/chat` 间接调用，绝不进入浏览器、`localStorage`、日志或响应。
-
-### 3. 启动开发服务器
-
-```bash
-npm run dev
-```
-
-打开 <http://localhost:3000>。
-
-### 4. 生产构建
-
-```bash
+npm run db:migrate            # 应用 prisma/migrations/0001_init
 npm run build
 npm run start
 ```
 
-## 常用命令
+> 生产登录必须在 HTTPS 下（会话 Cookie 的 Secure 属性依赖 HTTPS）。详见 `docs/DEPLOYMENT.md`。
+
+## 数据架构（PostgreSQL）
+
+| 表 | 说明 |
+| --- | --- |
+| `User` | 账号（email 唯一，passwordHash） |
+| `Workspace` / `WorkspaceMember` | 工作区与成员（owner/editor/viewer） |
+| `Novel` / `Chapter` | 小说与章节（`revision` 递增，`deletedAt` 软删除） |
+| `ChatSession` / `ChatMessage` | 对话 |
+| `Revision` | 版本历史快照 |
+| `SyncOperation` | 同步操作（`operationId` 唯一幂等 + 审计） |
+
+## 同步协议
+
+- 客户端每次修改生成 `{ operationId, entityType, entityId, operation, payload, baseRevision }`
+- 服务端 `POST /api/sync/push`：`operationId` 幂等去重；章节正文严格 `baseRevision` 校验，冲突返回 409 + 服务端版
+- `POST /api/sync/pull`：游标增量拉取（`updatedAt`），含软删除墓碑
+- 冲突策略：小说设定字段级自动合并；章节正文冲突保留双方，冲突解决页可选本地版/服务端版/手动合并
+
+## 安全
+
+- API Key 仅存服务端环境变量，前端不直连厂商；有「密钥不进入客户端源码」测试
+- 所有数据接口按当前用户 + 工作区成员角色鉴权，绝不信任前端传入的 userId/workspaceId
+- 登录、注册、AI 接口限流；请求体增量读取限流；`TRUSTED_IP_HEADER` 默认不信任客户端代理头
+- 不记录正文/设定/对话全文到普通日志；错误响应不泄露堆栈、密钥或连接串
+
+## 目录结构（要点）
+
+```
+app/api/                 # auth / workspaces / novels / chapters / revisions / sync / chat
+components/              # auth / workspace / editor / chat / pwa
+lib/
+  auth/                  # password / session / csrf
+  db/                    # Prisma client
+  domain/types.ts        # 实体类型
+  server/                # permissions / sync / revisions / rate-limit / http
+  local-db/              # IndexedDB schema/repository/migration/operation-queue/recovery
+  sync/engine.ts         # 客户端同步引擎（推拉 + 冲突）
+  novel/                 # Runtime 抽象（DeepSeek/Kimi）、prompt、validate
+prisma/schema.prisma     # 数据模型
+prisma/migrations/       # 迁移 SQL
+docker-compose.yml       # 本地 PostgreSQL
+docs/DEPLOYMENT.md       # 部署、迁移、备份、外部操作清单
+```
+
+## 命令
 
 ```bash
-npm run dev     # 开发服务器
-npm run build   # 生产构建
-npm run start   # 生产启动
-npm run lint    # ESLint 检查
-npm test        # 运行单元测试（vitest）
+npm run dev / build / start
+npm run lint
+npm test
+npm run db:migrate / db:generate / db:studio
 ```
-
-## 安全与限流
-
-`/api/chat` 会消耗你的 DeepSeek/Kimi 额度，公网部署前建议开启以下防护（应用层已内置，Nginx 层按需补充）：
-
-### 应用层（已内置）
-
-- **访问口令**：设置 `NOVEL_ACCESS_TOKEN` 后，前端在「作品设定 → 服务端访问口令」填入相同值即可，否则接口返回 `401`。
-- **限流**：单 IP 与全局的分钟/每日额度，超限返回 `429` + `Retry-After`。额度由 `NOVEL_RATE_*` 环境变量控制，`NOVEL_RATE_LIMIT_DISABLED=1` 可关闭。全局限流优先检查、IP 窗口带过期清理与容量上限，防止伪造 IP 绕过或内存耗尽。
-- **可信 IP**：默认不信任任何客户端可伪造的代理头，所有请求按 `unknown` 计；仅在配置 `TRUSTED_IP_HEADER` 后读取指定头（需 Nginx 以覆盖方式写入）。
-- **请求体限制**：增量读取请求体，超过 2 MB 立即取消。
-- **超时**：`LLM_TIMEOUT_MS` 覆盖「等待响应头」与「生成中途停滞」两段，卡住即中止。
-
-> 限流为**内存级**，仅单实例（单进程）生效。若用 PM2 cluster / 多实例部署，请替换为 Redis 等共享存储，或在 Nginx 层额外限流。
-
-### Nginx 层（可选，推荐）
-
-在反代该服务的 `server` 块中补充请求体与请求频率限制：
-
-```nginx
-# 请求体大小上限（与应用的 2MB 一致）
-client_max_body_size 2m;
-
-# 请求频率限制（需先在 http 块定义 limit_req_zone）
-# limit_req_zone $binary_remote_addr zone=novel:10m rate=5r/s;
-limit_req zone=novel burst=20 nodelay;
-
-# 用「覆盖」方式写入真实客户端 IP（$remote_addr 为 TCP 对端地址，客户端无法伪造）
-proxy_set_header X-Real-IP $remote_addr;
-```
-
-> 注意：**不要**使用 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
-> ——它会保留客户端伪造的 `X-Forwarded-For`。请使用覆盖式的 `X-Real-IP $remote_addr`，
-> 并在 `.env` 中设置 `TRUSTED_IP_HEADER=x-real-ip`，应用才会读取该头。
-
-### 供应商后台
-
-建议同时在 DeepSeek / Kimi 控制台设置**单日消费上限**，作为兜底。
-
-## 目录结构
-
-```
-app/
-  page.tsx               # 小说创作工作台主页（三栏布局）
-  layout.tsx             # 根布局
-  globals.css            # 全局样式 + Tailwind
-  api/chat/route.ts      # POST /api/chat 服务端大模型入口（SSE 流式）
-components/
-  ProjectSettings.tsx    # 作品设定面板
-  ChatPanel.tsx          # AI 对话面板（含快捷操作、流式、停止/重新生成/清空）
-  ManuscriptEditor.tsx   # 正文编辑器（字数统计、复制、导出 Markdown）
-lib/
-  novel/
-    types.ts             # 核心类型（NovelSettings / NovelRuntime / NovelAgentEvent 等）
-    prompt.ts            # 服务端 Prompt 组装
-    validate.ts          # 请求校验（大小 / 消息数量 / 消息长度）
-  runtime/
-    runtime.ts           # 运行时选择器（NOVEL_RUNTIME 切换）
-    direct-api.ts        # DirectApiRuntime：直连 DeepSeek / Kimi
-    deepseek-harness.ts  # DeepSeekHarnessRuntime：占位实现
-  providers/
-    openai-compatible.ts # 统一 OpenAI 兼容 Provider Adapter
-  server/
-    rate-limit.ts        # 内存级限流（单 IP + 全局）
-    body-limit.ts        # 请求体增量读取与大小限制
-  storage/
-    local.ts             # localStorage 封装
-.env.example             # 环境变量示例
-HARNESS_INTEGRATION.md   # DeepSeek Harness 接入方案
-```
-
-## 架构说明
-
-前后端只依赖统一的 `NovelRuntime` 抽象，不直接依赖某一家模型厂商或 Harness SDK：
-
-```ts
-interface NovelRuntime {
-  run(input: NovelAgentInput, signal?: AbortSignal): AsyncIterable<NovelAgentEvent>;
-}
-```
-
-- 当前实现：`DirectApiRuntime`（直接调用 DeepSeek / Kimi 的 OpenAI 兼容接口）
-- 未来实现：`DeepSeekHarnessRuntime`（详见 `HARNESS_INTEGRATION.md`）
-- 通过 `NOVEL_RUNTIME=direct|harness` 选择；Harness 未配置时返回清晰错误

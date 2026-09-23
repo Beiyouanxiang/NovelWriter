@@ -1,213 +1,146 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import ProjectSettings from "@/components/ProjectSettings";
-import ChatPanel from "@/components/ChatPanel";
-import ManuscriptEditor from "@/components/ManuscriptEditor";
-import type {
-  ChatMessage,
-  ManuscriptState,
-  NovelSettings,
-} from "@/lib/novel/types";
-import {
-  DEFAULT_MANUSCRIPT,
-  DEFAULT_PROVIDER,
-  DEFAULT_SETTINGS,
-  clearAll,
-  loadAccessToken,
-  loadChat,
-  loadManuscript,
-  loadProvider,
-  loadSettings,
-  saveAccessToken,
-  saveChat,
-  saveManuscript,
-  saveProvider,
-  saveSettings,
-} from "@/lib/storage/local";
+import { useState } from "react";
+import { useWorkspace } from "@/lib/client/use-workspace";
+import { useAuth } from "@/components/auth/AuthProvider";
+import TopBar from "@/components/workspace/TopBar";
+import Sidebar from "@/components/workspace/Sidebar";
+import MembersPanel from "@/components/workspace/MembersPanel";
+import ChatPanel from "@/components/chat/ChatPanel";
+import ChapterEditor from "@/components/editor/ChapterEditor";
 
 type Tab = "settings" | "chat" | "editor";
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "settings", label: "作品设定" },
-  { id: "chat", label: "AI 对话" },
-  { id: "editor", label: "正文" },
-];
-
 export default function Home() {
-  // 初始值固定为默认值（服务端与客户端首屏一致，避免 hydration mismatch）
-  const [settings, setSettings] = useState<NovelSettings>(DEFAULT_SETTINGS);
-  const [manuscript, setManuscript] = useState<ManuscriptState>(DEFAULT_MANUSCRIPT);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [provider, setProvider] = useState<string>(DEFAULT_PROVIDER);
-  const [accessToken, setAccessToken] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<Tab>("chat");
-  const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
-  const [hydrated, setHydrated] = useState(false);
-  const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ws = useWorkspace();
+  const { user } = useAuth();
+  const [tab, setTab] = useState<Tab>("editor");
+  const [showMembers, setShowMembers] = useState(false);
 
-  // 挂载后（仅浏览器）才从 localStorage 加载，避免 SSR 首屏与客户端不一致
-  useEffect(() => {
-    setSettings(loadSettings());
-    setManuscript(loadManuscript());
-    setMessages(loadChat());
-    setProvider(loadProvider());
-    setAccessToken(loadAccessToken());
-    setHydrated(true);
-  }, []);
-
-  // 作品设定：防抖自动保存（仅在加载完成后，避免默认值覆盖已有作品）
-  useEffect(() => {
-    if (!hydrated) return;
-    setSaveState("saving");
-    if (settingsTimer.current) clearTimeout(settingsTimer.current);
-    settingsTimer.current = setTimeout(() => {
-      saveSettings(settings);
-      setSaveState("saved");
-    }, 300);
-    return () => {
-      if (settingsTimer.current) clearTimeout(settingsTimer.current);
-    };
-  }, [settings, hydrated]);
-
-  // 正文 / 对话 / provider / 访问口令：即时自动保存（仅在加载完成后）
-  useEffect(() => {
-    if (hydrated) saveManuscript(manuscript);
-  }, [manuscript, hydrated]);
-  useEffect(() => {
-    if (hydrated) saveChat(messages);
-  }, [messages, hydrated]);
-  useEffect(() => {
-    if (hydrated) saveProvider(provider);
-  }, [provider, hydrated]);
-  useEffect(() => {
-    if (hydrated) saveAccessToken(accessToken);
-  }, [accessToken, hydrated]);
-
-  const lastAssistantMessage = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].content;
-    }
-    return null;
-  }, [messages]);
-
-  function appendAiToManuscript(content: string) {
-    setManuscript((prev) => ({
-      ...prev,
-      content: prev.content ? `${prev.content}\n\n${content}` : content,
-    }));
-  }
-
-  function replaceManuscriptWithAi(content: string) {
-    setManuscript((prev) => ({ ...prev, content }));
-  }
-
-  function handleNewWork() {
-    if (
-      !window.confirm(
-        "确定新建作品？当前的作品设定、正文与对话记录都将被清空，且无法恢复。"
-      )
-    ) {
-      return;
-    }
-    clearAll();
-    setSettings(DEFAULT_SETTINGS);
-    setManuscript(DEFAULT_MANUSCRIPT);
-    setMessages([]);
-    setProvider(DEFAULT_PROVIDER);
-    setActiveTab("settings");
-  }
+  const currentWorkspace = ws.workspaces.find((w) => w.id === ws.currentWorkspaceId);
+  const role = currentWorkspace?.role ?? "owner";
+  const readOnly = role === "viewer";
 
   return (
     <div className="flex h-screen flex-col">
-      {/* 顶栏 */}
-      <header className="shrink-0 border-b border-[#e7e2d8] bg-[#fbfaf7] px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-base font-semibold text-[#2b2a27]">
-            小说创作工作台
-          </h1>
-          <div className="flex items-center gap-3">
-            <span className="max-w-[30%] truncate text-sm text-[#6b675f]">
-              {settings.title || "未命名作品"}
-            </span>
-            <button
-              className="btn !px-2.5 !py-1 text-xs"
-              onClick={handleNewWork}
-              title="清空设定、正文与对话，开始新作品"
-            >
-              新建作品
-            </button>
-          </div>
-        </div>
-      </header>
+      <TopBar
+        workspaces={ws.workspaces}
+        novels={ws.novels}
+        currentWorkspaceId={ws.currentWorkspaceId}
+        currentNovelId={ws.currentNovelId}
+        onWorkspaceChange={(id) => {
+          ws.setCurrentWorkspaceId(id);
+          ws.setCurrentNovelId(null);
+          ws.setCurrentChapterId(null);
+        }}
+        onNovelChange={(id) => {
+          ws.setCurrentNovelId(id);
+          ws.setCurrentChapterId(null);
+        }}
+        online={ws.online}
+        saveStatus={ws.saveStatus}
+        syncStatus={ws.syncStatus}
+        pendingCount={ws.pendingCount}
+        onSync={() => void ws.doSync()}
+        onNewWorkspace={() => {
+          const name = window.prompt("新工作区名称：");
+          if (name) void ws.createWorkspace(name);
+        }}
+      />
 
       {/* 移动端标签栏 */}
-      <nav className="shrink-0 border-b border-[#e7e2d8] bg-[#fbfaf7] lg:hidden">
-        <div className="flex">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 py-2 text-sm transition-colors ${
-                activeTab === tab.id
-                  ? "border-b-2 border-[#8a5a44] text-[#2b2a27]"
-                  : "text-[#6b675f]"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+      <nav className="flex shrink-0 border-b border-[#e7e2d8] bg-[#fbfaf7] lg:hidden">
+        {(
+          [
+            ["settings", "设定"],
+            ["chat", "对话"],
+            ["editor", "正文"],
+          ] as [Tab, string][]
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`flex-1 py-2 text-sm ${
+              tab === id ? "border-b-2 border-[#8a5a44] text-[#2b2a27]" : "text-[#6b675f]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </nav>
 
-      {/* 桌面三栏 / 移动单栏 */}
+      {/* 成员管理入口 */}
+      {user && currentWorkspace && (
+        <div className="flex shrink-0 items-center justify-between border-b border-[#e7e2d8] bg-[#fbfaf7] px-4 py-1.5 text-xs text-[#6b675f]">
+          <span>
+            {ws.currentNovelId ? "已选择小说" : "请选择小说"} · 角色：{role}
+          </span>
+          <button className="text-[#8a5a44] hover:underline" onClick={() => setShowMembers(true)}>
+            管理成员
+          </button>
+        </div>
+      )}
+
       <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)_minmax(0,1.15fr)]">
         <section
           className={`h-full min-h-0 overflow-hidden border-b border-[#e7e2d8] lg:border-b-0 lg:border-r ${
-            activeTab === "settings" ? "block" : "hidden lg:block"
+            tab === "settings" ? "block" : "hidden lg:block"
           }`}
         >
-          <ProjectSettings
-            settings={settings}
-            onChange={setSettings}
-            saveState={saveState}
-            accessToken={accessToken}
-            onAccessTokenChange={setAccessToken}
+          <Sidebar
+            novels={ws.novels}
+            chapters={ws.chapters}
+            currentNovelId={ws.currentNovelId}
+            currentChapterId={ws.currentChapterId}
+            currentNovel={ws.currentNovel}
+            onSelectNovel={(id) => {
+              ws.setCurrentNovelId(id);
+              ws.setCurrentChapterId(null);
+            }}
+            onSelectChapter={(id) => ws.setCurrentChapterId(id)}
+            onNewNovel={(title) => void ws.createNovel(title)}
+            onNewChapter={() => void ws.createChapter()}
+            onDeleteChapter={(id) => void ws.deleteChapter(id)}
+            onUpdateNovel={(id, patch) => void ws.updateNovel(id, patch)}
+            readOnly={readOnly}
           />
         </section>
 
         <section
           className={`h-full min-h-0 overflow-hidden border-b border-[#e7e2d8] lg:border-b-0 lg:border-r ${
-            activeTab === "chat" ? "block" : "hidden lg:block"
+            tab === "chat" ? "block" : "hidden lg:block"
           }`}
         >
-          <ChatPanel
-            provider={provider}
-            onProviderChange={setProvider}
-            messages={messages}
-            onMessagesChange={setMessages}
-            settings={settings}
-            manuscript={manuscript}
-            accessToken={accessToken}
-            onAppendToManuscript={appendAiToManuscript}
-            onReplaceManuscript={replaceManuscriptWithAi}
-          />
+          <ChatPanel novel={ws.currentNovel} chapter={ws.currentChapter} online={ws.online} readOnly={readOnly} />
         </section>
 
         <section
-          className={`h-full min-h-0 overflow-hidden ${
-            activeTab === "editor" ? "block" : "hidden lg:block"
-          }`}
+          className={`h-full min-h-0 overflow-hidden ${tab === "editor" ? "block" : "hidden lg:block"}`}
         >
-          <ManuscriptEditor
-            manuscript={manuscript}
-            onChange={setManuscript}
-            lastAssistantMessage={lastAssistantMessage}
-            onAppendAi={appendAiToManuscript}
-            onReplaceAi={replaceManuscriptWithAi}
+          <ChapterEditor
+            chapter={ws.currentChapter}
+            novels={ws.novels}
+            chapters={ws.chapters}
+            online={ws.online}
+            saveStatus={ws.saveStatus}
+            syncStatus={ws.syncStatus}
+            pendingCount={ws.pendingCount}
+            conflicts={ws.conflicts}
+            readOnly={readOnly}
+            onUpdateChapter={(id, patch) => ws.updateChapter(id, patch)}
+            onFlush={() => void ws.flush()}
+            onResolveConflict={(r, c) => void ws.resolveConflict(r, c)}
           />
         </section>
       </main>
+
+      {showMembers && currentWorkspace && (
+        <MembersPanel
+          workspaceId={currentWorkspace.id}
+          role={role}
+          onClose={() => setShowMembers(false)}
+        />
+      )}
     </div>
   );
 }

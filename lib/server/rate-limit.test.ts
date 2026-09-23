@@ -76,6 +76,18 @@ describe("checkRateLimit", () => {
     expect(getIpEntryCount()).toBe(2);
   });
 
+  it("Retry-After 只按实际超限的窗口计算", () => {
+    // 全局每分钟额度=1 超限，但每日额度充足 → Retry-After 应为分钟级（约 50s），而非每日级大值
+    setLimits(1000, 1000, 1, 100000);
+    expect(checkRateLimit("1.1.1.1", 0).allowed).toBe(true); // 全局分钟 count=1
+    const blocked = checkRateLimit("2.2.2.2", 10_000); // 10s 后全局分钟已满，每日充足
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toContain("全局");
+    // 分钟窗口 resetAt=0，now=10000 → (60000-10000)/1000 = 50s
+    expect(blocked.retryAfterSeconds).toBe(50);
+    expect(blocked.retryAfterSeconds).toBeLessThanOrEqual(60);
+  });
+
   it("禁用限流时始终放行", () => {
     setLimits(1, 1, 1, 1);
     process.env.NOVEL_RATE_LIMIT_DISABLED = "1";

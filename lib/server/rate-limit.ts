@@ -131,24 +131,25 @@ export function checkRateLimit(key: string, now: number = Date.now()): RateLimit
   // 1) 全局额度优先（不创建任何 IP 记录）
   const gMinute = getWindow(globalMinute, GLOBAL_KEY, now, MINUTE_MS);
   const gDay = getWindow(globalDay, GLOBAL_KEY, now, DAY_MS);
-  if (
-    (opts.globalPerMinute > 0 && gMinute.count >= opts.globalPerMinute) ||
-    (opts.globalPerDay > 0 && gDay.count >= opts.globalPerDay)
-  ) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.max(
-        retryAfterSeconds(gMinute, MINUTE_MS, now),
-        retryAfterSeconds(gDay, DAY_MS, now)
-      ),
-      reason: "全局请求次数已达上限",
-    };
+  const gMinuteExceeded = opts.globalPerMinute > 0 && gMinute.count >= opts.globalPerMinute;
+  const gDayExceeded = opts.globalPerDay > 0 && gDay.count >= opts.globalPerDay;
+  if (gMinuteExceeded || gDayExceeded) {
+    // Retry-After 只按「实际超限」的窗口计算，未超限的窗口不参与
+    let retryAfter = 0;
+    if (gMinuteExceeded) {
+      retryAfter = Math.max(retryAfter, retryAfterSeconds(gMinute, MINUTE_MS, now));
+    }
+    if (gDayExceeded) {
+      retryAfter = Math.max(retryAfter, retryAfterSeconds(gDay, DAY_MS, now));
+    }
+    return { allowed: false, retryAfterSeconds: retryAfter, reason: "全局请求次数已达上限" };
   }
 
-  // 2) 容量保护：新 IP 且已达上限时先清过期，仍超限则拒绝
-  if (!ipMinute.has(key) && ipMinute.size >= opts.maxIpEntries) {
+  // 2) 容量保护：分钟与每日两个 Map 都必须受容量限制；新 IP 且已达上限时先清过期
+  const entryCount = Math.max(ipMinute.size, ipDay.size);
+  if (!ipMinute.has(key) && entryCount >= opts.maxIpEntries) {
     sweepExpired(now);
-    if (ipMinute.size >= opts.maxIpEntries) {
+    if (Math.max(ipMinute.size, ipDay.size) >= opts.maxIpEntries) {
       return { allowed: false, retryAfterSeconds: 1, reason: "服务繁忙，请稍后再试" };
     }
   }
@@ -156,18 +157,18 @@ export function checkRateLimit(key: string, now: number = Date.now()): RateLimit
   // 3) 单 IP 额度
   const ipM = getWindow(ipMinute, key, now, MINUTE_MS);
   const ipD = getWindow(ipDay, key, now, DAY_MS);
-  if (
-    (opts.ipPerMinute > 0 && ipM.count >= opts.ipPerMinute) ||
-    (opts.ipPerDay > 0 && ipD.count >= opts.ipPerDay)
-  ) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.max(
-        retryAfterSeconds(ipM, MINUTE_MS, now),
-        retryAfterSeconds(ipD, DAY_MS, now)
-      ),
-      reason: "单 IP 请求次数已达上限",
-    };
+  const ipMinuteExceeded = opts.ipPerMinute > 0 && ipM.count >= opts.ipPerMinute;
+  const ipDayExceeded = opts.ipPerDay > 0 && ipD.count >= opts.ipPerDay;
+  if (ipMinuteExceeded || ipDayExceeded) {
+    // Retry-After 只按「实际超限」的窗口计算
+    let retryAfter = 0;
+    if (ipMinuteExceeded) {
+      retryAfter = Math.max(retryAfter, retryAfterSeconds(ipM, MINUTE_MS, now));
+    }
+    if (ipDayExceeded) {
+      retryAfter = Math.max(retryAfter, retryAfterSeconds(ipD, DAY_MS, now));
+    }
+    return { allowed: false, retryAfterSeconds: retryAfter, reason: "单 IP 请求次数已达上限" };
   }
 
   // 4) 全部通过 → 递增计数

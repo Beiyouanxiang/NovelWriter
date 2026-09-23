@@ -1,0 +1,23 @@
+# NovelWriter 本地/开发环境 PostgreSQL
+# 用法：docker compose up -d
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: novelwriter-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: novelwriter
+      POSTGRES_PASSWORD: novelwriter
+      POSTGRES_DB: novelwriter
+    ports:
+      - "5432:5432"
+    volumes:
+      - novelwriter_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U novelwriter"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  novelwriter_pgdata:
