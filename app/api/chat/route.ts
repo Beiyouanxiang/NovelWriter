@@ -3,6 +3,7 @@ import { buildSystemPrompt } from "@/lib/novel/prompt";
 import { validateChatRequest, LIMITS } from "@/lib/novel/validate";
 import { checkRateLimit } from "@/lib/server/rate-limit";
 import { readBodyWithLimit } from "@/lib/server/body-limit";
+import { getClientIp } from "@/lib/server/client-ip";
 import type { NovelAgentEvent, NovelAgentInput } from "@/lib/novel/types";
 
 /**
@@ -49,18 +50,6 @@ function jsonError(
       ...extraHeaders,
     },
   });
-}
-
-/** 提取客户端 IP（优先 X-Forwarded-For，其次 X-Real-IP） */
-function getClientIp(request: Request): string {
-  const xff = request.headers.get("x-forwarded-for");
-  if (xff) {
-    const first = xff.split(",")[0]?.trim();
-    if (first) return first;
-  }
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return realIp.trim();
-  return "unknown";
 }
 
 /** 可选访问口令校验：未配置 NOVEL_ACCESS_TOKEN 时跳过 */

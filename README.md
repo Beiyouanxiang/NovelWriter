@@ -54,8 +54,10 @@ cp .env.example .env.local
 | `LLM_ALLOWED_PROVIDERS` | 允许的 provider 列表 | 可选，默认 `deepseek,kimi` |
 | `NOVEL_RUNTIME` | 运行模式：`direct` 或 `harness` | 可选，默认 `direct` |
 | `NOVEL_ACCESS_TOKEN` | 服务端访问口令（设置后前端需填入相同值，否则 401） | 可选，默认空（不校验） |
+| `TRUSTED_IP_HEADER` | 可信代理头（默认空=不信任客户端头，见下） | 可选，默认空 |
 | `NOVEL_RATE_IP_PER_MINUTE` / `_PER_DAY` | 单 IP 分钟/每日额度 | 可选，默认 `30` / `300` |
 | `NOVEL_RATE_GLOBAL_PER_MINUTE` / `_PER_DAY` | 全局分钟/每日额度 | 可选，默认 `120` / `5000` |
+| `NOVEL_RATE_MAX_IP_ENTRIES` | IP 窗口最大条目数 | 可选，默认 `10000` |
 | `NOVEL_RATE_LIMIT_DISABLED` | 设为 `1` 关闭限流 | 可选，默认空（启用） |
 
 > **安全说明**：API Key 只保存在服务端环境变量中，前端通过 `/api/chat` 间接调用，绝不进入浏览器、`localStorage`、日志或响应。
@@ -92,7 +94,8 @@ npm test        # 运行单元测试（vitest）
 ### 应用层（已内置）
 
 - **访问口令**：设置 `NOVEL_ACCESS_TOKEN` 后，前端在「作品设定 → 服务端访问口令」填入相同值即可，否则接口返回 `401`。
-- **限流**：单 IP 与全局的分钟/每日额度，超限返回 `429` + `Retry-After`。额度由 `NOVEL_RATE_*` 环境变量控制，`NOVEL_RATE_LIMIT_DISABLED=1` 可关闭。
+- **限流**：单 IP 与全局的分钟/每日额度，超限返回 `429` + `Retry-After`。额度由 `NOVEL_RATE_*` 环境变量控制，`NOVEL_RATE_LIMIT_DISABLED=1` 可关闭。全局限流优先检查、IP 窗口带过期清理与容量上限，防止伪造 IP 绕过或内存耗尽。
+- **可信 IP**：默认不信任任何客户端可伪造的代理头，所有请求按 `unknown` 计；仅在配置 `TRUSTED_IP_HEADER` 后读取指定头（需 Nginx 以覆盖方式写入）。
 - **请求体限制**：增量读取请求体，超过 2 MB 立即取消。
 - **超时**：`LLM_TIMEOUT_MS` 覆盖「等待响应头」与「生成中途停滞」两段，卡住即中止。
 
@@ -110,10 +113,13 @@ client_max_body_size 2m;
 # limit_req_zone $binary_remote_addr zone=novel:10m rate=5r/s;
 limit_req zone=novel burst=20 nodelay;
 
-# 转发客户端真实 IP（供应用层限流识别）
-proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+# 用「覆盖」方式写入真实客户端 IP（$remote_addr 为 TCP 对端地址，客户端无法伪造）
 proxy_set_header X-Real-IP $remote_addr;
 ```
+
+> 注意：**不要**使用 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+> ——它会保留客户端伪造的 `X-Forwarded-For`。请使用覆盖式的 `X-Real-IP $remote_addr`，
+> 并在 `.env` 中设置 `TRUSTED_IP_HEADER=x-real-ip`，应用才会读取该头。
 
 ### 供应商后台
 

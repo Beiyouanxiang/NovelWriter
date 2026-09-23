@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { checkRateLimit, resetRateLimiter } from "./rate-limit";
+import { checkRateLimit, resetRateLimiter, getIpEntryCount } from "./rate-limit";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -35,7 +35,7 @@ describe("checkRateLimit", () => {
     expect(checkRateLimit("9.9.9.9", 2000).allowed).toBe(true);
     const blocked = checkRateLimit("9.9.9.9", 3000);
     expect(blocked.allowed).toBe(false);
-    expect(blocked.reason).toContain("单 IP 每分钟");
+    expect(blocked.reason).toContain("单 IP");
     expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
   });
 
@@ -53,7 +53,27 @@ describe("checkRateLimit", () => {
     expect(checkRateLimit("b.b.b.b", 1000).allowed).toBe(true);
     const blocked = checkRateLimit("c.c.c.c", 2000);
     expect(blocked.allowed).toBe(false);
-    expect(blocked.reason).toContain("全局每分钟");
+    expect(blocked.reason).toContain("全局");
+  });
+
+  it("全局限额用尽后不再为新 IP 创建记录", () => {
+    setLimits(1000, 1000, 1, 100000);
+    expect(checkRateLimit("1.1.1.1", 0).allowed).toBe(true);
+    // 全局已满，换新 IP 也应被全局拒绝，且不新增 IP 记录（防内存增长）
+    const blocked = checkRateLimit("2.2.2.2", 1000);
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toContain("全局");
+    expect(getIpEntryCount()).toBe(1);
+  });
+
+  it("IP 表达到容量上限时拒绝新 IP", () => {
+    setLimits(1000, 1000, 100000, 100000);
+    process.env.NOVEL_RATE_MAX_IP_ENTRIES = "2";
+    expect(checkRateLimit("a.a.a.a", 0).allowed).toBe(true);
+    expect(checkRateLimit("b.b.b.b", 0).allowed).toBe(true);
+    const blocked = checkRateLimit("c.c.c.c", 0);
+    expect(blocked.allowed).toBe(false);
+    expect(getIpEntryCount()).toBe(2);
   });
 
   it("禁用限流时始终放行", () => {
