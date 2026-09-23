@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --paper: #f6f3ec;
+  --paper-soft: #fbfaf7;
+  --ink: #2b2a27;
+  --ink-soft: #6b675f;
+  --line: #e7e2d8;
+  --accent: #8a5a44;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 正文写作区使用衬线字体，营造沉浸写作氛围 */
+.font-writing {
+  font-family: "Songti SC", "Noto Serif CJK SC", "STSong", "SimSun", "Source Han Serif SC",
+    Georgia, serif;
+}
+
+/* 细腻的滚动条，避免打扰写作 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d4cdbd transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #d4cdbd;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #bdb5a3;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 统一 focus 样式，沉浸且克制 */
+textarea:focus,
+input:focus {
+  outline: none;
+}
+
+@layer components {
+  .field-label {
+    @apply mb-1 block text-xs font-medium text-[#6b675f];
+  }
+  .field-input {
+    @apply w-full rounded-md border border-[#e7e2d8] bg-[#fbfaf7] px-3 py-2 text-sm text-[#2b2a27] placeholder-[#b5ad9e] transition-colors focus:border-[#8a5a44];
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1 rounded-md border border-[#e7e2d8] bg-[#fbfaf7] px-3 py-1.5 text-sm text-[#2b2a27] transition-colors hover:border-[#bdb5a3] hover:bg-[#f3efe6] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1 rounded-md border border-[#8a5a44] bg-[#8a5a44] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-[#74482f] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+}

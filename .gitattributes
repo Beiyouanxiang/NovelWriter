@@ -1,0 +1,7 @@
+# 统一换行符为 LF，避免在 Windows/Linux 之间产生 CRLF 差异
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
