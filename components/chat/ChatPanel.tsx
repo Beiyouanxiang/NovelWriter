@@ -10,6 +10,13 @@ interface ChatMessageView {
   incomplete?: boolean;
 }
 
+interface ProviderInfo {
+  id: string;
+  label: string;
+  models: string[];
+  defaultModel: string;
+}
+
 interface ChatPanelProps {
   novel: Novel | null;
   chapter: Chapter | null;
@@ -27,7 +34,9 @@ const QUICK_ACTIONS: Array<{ label: string; instruction: string }> = [
 ];
 
 export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPanelProps) {
-  const [provider, setProvider] = useState<"deepseek" | "kimi" | "glm">("deepseek");
+  const [provider, setProvider] = useState("deepseek");
+  const [model, setModel] = useState("");
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [messages, setMessages] = useState<ChatMessageView[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -36,6 +45,31 @@ export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPane
   const abortRef = useRef<AbortController | null>(null);
   const pendingRef = useRef("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // 拉取可用的 provider 与模型列表
+  useEffect(() => {
+    fetch("/api/models")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.providers?.length) {
+          setProviders(d.providers);
+          const first = d.providers[0] as ProviderInfo;
+          setProvider(first.id);
+          setModel(first.defaultModel || first.models[0] || "");
+        }
+      })
+      .catch(() => {
+        // 拉取失败时用默认（provider=deepseek，model 留空走服务端默认）
+      });
+  }, []);
+
+  const currentProvider = providers.find((p) => p.id === provider);
+
+  function selectProvider(p: string) {
+    setProvider(p);
+    const info = providers.find((x) => x.id === p);
+    setModel(info?.defaultModel || info?.models[0] || "");
+  }
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -70,6 +104,7 @@ export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPane
         credentials: "same-origin",
         body: JSON.stringify({
           provider,
+          model: model || undefined,
           novelId: novel.id,
           chapterId: chapter?.id,
           instruction,
@@ -179,24 +214,32 @@ export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPane
           </button>
         </div>
         <div className="mt-2 flex gap-1 rounded-md bg-[#efeae0] p-1">
-          {(
-            [
-              ["deepseek", "DeepSeek"],
-              ["kimi", "Kimi"],
-              ["glm", "GLM"],
-            ] as const
-          ).map(([p, label]) => (
+          {providers.map((p) => (
             <button
-              key={p}
-              onClick={() => setProvider(p)}
+              key={p.id}
+              onClick={() => selectProvider(p.id)}
               className={`flex-1 rounded px-2 py-1 text-xs ${
-                provider === p ? "bg-[#fbfaf7] text-[#2b2a27] shadow-sm" : "text-[#6b675f]"
+                provider === p.id ? "bg-[#fbfaf7] text-[#2b2a27] shadow-sm" : "text-[#6b675f]"
               }`}
             >
-              {label}
+              {p.label}
             </button>
           ))}
         </div>
+        {currentProvider && currentProvider.models.length > 1 && (
+          <select
+            className="field-input mt-2 !py-1 text-xs"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={streaming}
+          >
+            {currentProvider.models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">

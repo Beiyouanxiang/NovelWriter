@@ -8,6 +8,7 @@ import { getSession } from "@/lib/server/auth-context";
 import { requireRole } from "@/lib/server/permissions";
 import { requireCsrf } from "@/lib/server/http";
 import { readBodyWithLimit } from "@/lib/server/body-limit";
+import { isModelAllowed } from "@/lib/server/models";
 import type { NovelSettings, ManuscriptState, NovelAgentEvent, NovelAgentInput } from "@/lib/novel/types";
 
 /**
@@ -31,6 +32,7 @@ const SSE_HEADERS = {
 
 const chatSchema = z.object({
   provider: z.string().min(1).max(32),
+  model: z.string().max(128).optional(),
   novelId: z.string().min(1).max(64),
   chapterId: z.string().max(64).optional(),
   instruction: z.string().min(1).max(20000),
@@ -89,12 +91,17 @@ export async function POST(request: Request) {
   const parsed = chatSchema.safeParse(body);
   if (!parsed.success) return jsonError2(400, "请求参数不合法");
 
-  const { provider, novelId, chapterId, instruction, recentMessages } = parsed.data;
+  const { provider, model, novelId, chapterId, instruction, recentMessages } = parsed.data;
 
   // 5) 校验 provider 白名单
   const providerName = provider.toLowerCase();
   if (!getAllowedProviders().includes(providerName)) {
     return jsonError2(400, `不支持的 provider：${provider}`);
+  }
+
+  // 5.5) 校验模型是否在该 provider 的允许列表内
+  if (model && !isModelAllowed(providerName, model)) {
+    return jsonError2(400, `模型 ${model} 不在 ${providerName} 的允许列表内`);
   }
 
   // 6) 从数据库加载小说与章节，校验成员身份（editor）
@@ -132,7 +139,7 @@ export async function POST(request: Request) {
     session: { messages: recentMessages },
     prompt: systemPrompt,
     instruction,
-    model: { provider: providerName, modelId: "" },
+    model: { provider: providerName, modelId: model || "" },
     novelContext: {
       settings,
       manuscript,

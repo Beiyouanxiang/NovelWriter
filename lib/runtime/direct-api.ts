@@ -98,6 +98,8 @@ export class DirectApiRuntime implements NovelRuntime {
       { role: "user", content: input.instruction },
     ];
 
+    // 模型：请求里显式指定的 modelId 优先，否则回退到环境变量默认值
+    const model = input.model.modelId || config.model;
     const timeoutMs = Number(process.env.LLM_TIMEOUT_MS || 30000);
 
     try {
@@ -105,7 +107,7 @@ export class DirectApiRuntime implements NovelRuntime {
         {
           baseUrl: config.baseUrl,
           apiKey: config.apiKey,
-          model: config.model,
+          model,
           timeoutMs,
         },
         messages,
