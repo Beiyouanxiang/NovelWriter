@@ -27,7 +27,7 @@ const QUICK_ACTIONS: Array<{ label: string; instruction: string }> = [
 ];
 
 export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPanelProps) {
-  const [provider, setProvider] = useState<"deepseek" | "kimi">("deepseek");
+  const [provider, setProvider] = useState<"deepseek" | "kimi" | "glm">("deepseek");
   const [messages, setMessages] = useState<ChatMessageView[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -179,7 +179,13 @@ export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPane
           </button>
         </div>
         <div className="mt-2 flex gap-1 rounded-md bg-[#efeae0] p-1">
-          {(["deepseek", "kimi"] as const).map((p) => (
+          {(
+            [
+              ["deepseek", "DeepSeek"],
+              ["kimi", "Kimi"],
+              ["glm", "GLM"],
+            ] as const
+          ).map(([p, label]) => (
             <button
               key={p}
               onClick={() => setProvider(p)}
@@ -187,7 +193,7 @@ export default function ChatPanel({ novel, chapter, online, readOnly }: ChatPane
                 provider === p ? "bg-[#fbfaf7] text-[#2b2a27] shadow-sm" : "text-[#6b675f]"
               }`}
             >
-              {p === "deepseek" ? "DeepSeek" : "Kimi"}
+              {label}
             </button>
           ))}
         </div>

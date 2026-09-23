@@ -36,6 +36,12 @@ const PROVIDER_ENV: Record<string, ProviderEnvSpec> = {
     modelEnv: "KIMI_MODEL",
     defaultBaseUrl: "https://api.moonshot.ai/v1",
   },
+  glm: {
+    baseUrlEnv: "GLM_BASE_URL",
+    apiKeyEnv: "GLM_API_KEY",
+    modelEnv: "GLM_MODEL",
+    defaultBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+  },
 };
 
 /** 读取 provider 的运行时配置（每次调用时读取，便于测试与热更新） */

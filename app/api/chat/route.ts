@@ -45,7 +45,7 @@ const chatSchema = z.object({
 });
 
 function getAllowedProviders(): string[] {
-  return (process.env.LLM_ALLOWED_PROVIDERS || "deepseek,kimi")
+  return (process.env.LLM_ALLOWED_PROVIDERS || "deepseek,kimi,glm")
     .split(",")
     .map((p) => p.trim().toLowerCase())
     .filter(Boolean);

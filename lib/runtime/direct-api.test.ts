@@ -33,6 +33,8 @@ describe("resolveProviderConfig", () => {
     process.env.DEEPSEEK_MODEL = "deepseek-chat";
     process.env.KIMI_API_KEY = "sk-kimi";
     process.env.KIMI_MODEL = "moonshot-v1-8k";
+    process.env.GLM_API_KEY = "sk-glm";
+    process.env.GLM_MODEL = "glm-4-flash";
   });
 
   afterEach(() => {
@@ -51,6 +53,13 @@ describe("resolveProviderConfig", () => {
     expect(cfg?.baseUrl).toBe("https://api.moonshot.ai/v1");
     expect(cfg?.apiKey).toBe("sk-kimi");
     expect(cfg?.model).toBe("moonshot-v1-8k");
+  });
+
+  it("映射 glm 配置（智谱 OpenAI 兼容接口）", () => {
+    const cfg = resolveProviderConfig("glm");
+    expect(cfg?.baseUrl).toBe("https://open.bigmodel.cn/api/paas/v4");
+    expect(cfg?.apiKey).toBe("sk-glm");
+    expect(cfg?.model).toBe("glm-4-flash");
   });
 
   it("未知 provider 返回 null", () => {
