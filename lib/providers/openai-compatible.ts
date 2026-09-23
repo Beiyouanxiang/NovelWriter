@@ -71,13 +71,9 @@ export async function* streamChatCompletion(
 ): AsyncIterable<string> {
   const { baseUrl, apiKey, model, timeoutMs = 30000 } = config;
 
+  // 内部 AbortController：同时承接「超时」与「外部取消」两种信号
   const controller = new AbortController();
   let timedOut = false;
-
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
 
   const onAbort = () => controller.abort();
   if (signal) {
@@ -88,9 +84,26 @@ export async function* streamChatCompletion(
     }
   }
 
-  let res: Response;
+  // 超时定时器：每次读到数据前重新计时，覆盖「等待响应头」和「生成中途停滞」两段。
+  // 若两次数据间隔超过 timeoutMs，则判定为卡住并中止。
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const armTimer = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  };
+  const disarmTimer = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
   try {
-    res = await fetch(buildUrl(baseUrl), {
+    armTimer();
+    const res = await fetch(buildUrl(baseUrl), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -103,65 +116,57 @@ export async function* streamChatCompletion(
       }),
       signal: controller.signal,
     });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let message = `请求失败（HTTP ${res.status}）`;
+      try {
+        const json = JSON.parse(text);
+        if (json?.error?.message) {
+          message = json.error.message;
+        }
+      } catch {
+        // 响应体非 JSON，忽略
+      }
+      // 注意：错误信息不回传 API Key，也不写入日志
+      throw new OpenAICompatibleError(message, res.status);
+    }
+
+    if (!res.body) {
+      throw new OpenAICompatibleError("响应体为空");
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        armTimer();
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const delta = extractDeltaFromSSEData(trimmed.slice("data:".length));
+          if (delta !== null) {
+            yield delta;
+          }
+        }
+      }
+    } finally {
+      // 读取结束或异常时取消 reader，释放底层连接（超时/取消时尤为重要）
+      await reader.cancel().catch(() => {});
+    }
   } catch (err) {
-    clearTimeout(timer);
-    if (signal) signal.removeEventListener("abort", onAbort);
     if (timedOut) {
       throw new OpenAICompatibleError("请求超时，请稍后重试");
     }
-    if (signal?.aborted) {
-      throw new OpenAICompatibleError("生成已停止");
-    }
-    throw new OpenAICompatibleError(
-      `网络错误：${err instanceof Error ? err.message : "无法连接服务"}`
-    );
-  }
-
-  clearTimeout(timer);
-  if (signal) signal.removeEventListener("abort", onAbort);
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let message = `请求失败（HTTP ${res.status}）`;
-    try {
-      const json = JSON.parse(text);
-      if (json?.error?.message) {
-        message = json.error.message;
-      }
-    } catch {
-      // 响应体非 JSON，忽略
-    }
-    // 注意：错误信息不回传 API Key，也不写入日志
-    throw new OpenAICompatibleError(message, res.status);
-  }
-
-  if (!res.body) {
-    throw new OpenAICompatibleError("响应体为空");
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const delta = extractDeltaFromSSEData(trimmed.slice("data:".length));
-        if (delta !== null) {
-          yield delta;
-        }
-      }
-    }
-  } catch (err) {
     if (signal?.aborted) {
       throw new OpenAICompatibleError("生成已停止");
     }
@@ -169,7 +174,11 @@ export async function* streamChatCompletion(
       throw err;
     }
     throw new OpenAICompatibleError(
-      err instanceof Error ? err.message : "读取流失败"
+      err instanceof Error ? err.message : "网络或读取流错误"
     );
+  } finally {
+    // 清理统一放在 finally，确保覆盖整个流读取过程
+    disarmTimer();
+    if (signal) signal.removeEventListener("abort", onAbort);
   }
 }

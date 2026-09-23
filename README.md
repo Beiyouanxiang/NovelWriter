@@ -53,6 +53,10 @@ cp .env.example .env.local
 | `LLM_TIMEOUT_MS` | 单次请求超时（毫秒） | 可选，默认 `30000` |
 | `LLM_ALLOWED_PROVIDERS` | 允许的 provider 列表 | 可选，默认 `deepseek,kimi` |
 | `NOVEL_RUNTIME` | 运行模式：`direct` 或 `harness` | 可选，默认 `direct` |
+| `NOVEL_ACCESS_TOKEN` | 服务端访问口令（设置后前端需填入相同值，否则 401） | 可选，默认空（不校验） |
+| `NOVEL_RATE_IP_PER_MINUTE` / `_PER_DAY` | 单 IP 分钟/每日额度 | 可选，默认 `30` / `300` |
+| `NOVEL_RATE_GLOBAL_PER_MINUTE` / `_PER_DAY` | 全局分钟/每日额度 | 可选，默认 `120` / `5000` |
+| `NOVEL_RATE_LIMIT_DISABLED` | 设为 `1` 关闭限流 | 可选，默认空（启用） |
 
 > **安全说明**：API Key 只保存在服务端环境变量中，前端通过 `/api/chat` 间接调用，绝不进入浏览器、`localStorage`、日志或响应。
 
@@ -81,6 +85,40 @@ npm run lint    # ESLint 检查
 npm test        # 运行单元测试（vitest）
 ```
 
+## 安全与限流
+
+`/api/chat` 会消耗你的 DeepSeek/Kimi 额度，公网部署前建议开启以下防护（应用层已内置，Nginx 层按需补充）：
+
+### 应用层（已内置）
+
+- **访问口令**：设置 `NOVEL_ACCESS_TOKEN` 后，前端在「作品设定 → 服务端访问口令」填入相同值即可，否则接口返回 `401`。
+- **限流**：单 IP 与全局的分钟/每日额度，超限返回 `429` + `Retry-After`。额度由 `NOVEL_RATE_*` 环境变量控制，`NOVEL_RATE_LIMIT_DISABLED=1` 可关闭。
+- **请求体限制**：增量读取请求体，超过 2 MB 立即取消。
+- **超时**：`LLM_TIMEOUT_MS` 覆盖「等待响应头」与「生成中途停滞」两段，卡住即中止。
+
+> 限流为**内存级**，仅单实例（单进程）生效。若用 PM2 cluster / 多实例部署，请替换为 Redis 等共享存储，或在 Nginx 层额外限流。
+
+### Nginx 层（可选，推荐）
+
+在反代该服务的 `server` 块中补充请求体与请求频率限制：
+
+```nginx
+# 请求体大小上限（与应用的 2MB 一致）
+client_max_body_size 2m;
+
+# 请求频率限制（需先在 http 块定义 limit_req_zone）
+# limit_req_zone $binary_remote_addr zone=novel:10m rate=5r/s;
+limit_req zone=novel burst=20 nodelay;
+
+# 转发客户端真实 IP（供应用层限流识别）
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Real-IP $remote_addr;
+```
+
+### 供应商后台
+
+建议同时在 DeepSeek / Kimi 控制台设置**单日消费上限**，作为兜底。
+
 ## 目录结构
 
 ```
@@ -104,6 +142,9 @@ lib/
     deepseek-harness.ts  # DeepSeekHarnessRuntime：占位实现
   providers/
     openai-compatible.ts # 统一 OpenAI 兼容 Provider Adapter
+  server/
+    rate-limit.ts        # 内存级限流（单 IP + 全局）
+    body-limit.ts        # 请求体增量读取与大小限制
   storage/
     local.ts             # localStorage 封装
 .env.example             # 环境变量示例

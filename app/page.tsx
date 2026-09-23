@@ -10,10 +10,16 @@ import type {
   NovelSettings,
 } from "@/lib/novel/types";
 import {
+  DEFAULT_MANUSCRIPT,
+  DEFAULT_PROVIDER,
+  DEFAULT_SETTINGS,
+  clearAll,
+  loadAccessToken,
   loadChat,
   loadManuscript,
   loadProvider,
   loadSettings,
+  saveAccessToken,
   saveChat,
   saveManuscript,
   saveProvider,
@@ -29,18 +35,30 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 export default function Home() {
-  const [settings, setSettings] = useState<NovelSettings>(() => loadSettings());
-  const [manuscript, setManuscript] = useState<ManuscriptState>(() =>
-    loadManuscript()
-  );
-  const [messages, setMessages] = useState<ChatMessage[]>(() => loadChat());
-  const [provider, setProvider] = useState<string>(() => loadProvider());
+  // 初始值固定为默认值（服务端与客户端首屏一致，避免 hydration mismatch）
+  const [settings, setSettings] = useState<NovelSettings>(DEFAULT_SETTINGS);
+  const [manuscript, setManuscript] = useState<ManuscriptState>(DEFAULT_MANUSCRIPT);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [provider, setProvider] = useState<string>(DEFAULT_PROVIDER);
+  const [accessToken, setAccessToken] = useState<string>("");
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
+  const [hydrated, setHydrated] = useState(false);
   const settingsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 作品设定：防抖自动保存
+  // 挂载后（仅浏览器）才从 localStorage 加载，避免 SSR 首屏与客户端不一致
   useEffect(() => {
+    setSettings(loadSettings());
+    setManuscript(loadManuscript());
+    setMessages(loadChat());
+    setProvider(loadProvider());
+    setAccessToken(loadAccessToken());
+    setHydrated(true);
+  }, []);
+
+  // 作品设定：防抖自动保存（仅在加载完成后，避免默认值覆盖已有作品）
+  useEffect(() => {
+    if (!hydrated) return;
     setSaveState("saving");
     if (settingsTimer.current) clearTimeout(settingsTimer.current);
     settingsTimer.current = setTimeout(() => {
@@ -50,18 +68,21 @@ export default function Home() {
     return () => {
       if (settingsTimer.current) clearTimeout(settingsTimer.current);
     };
-  }, [settings]);
+  }, [settings, hydrated]);
 
-  // 正文 / 对话 / provider：即时自动保存
+  // 正文 / 对话 / provider / 访问口令：即时自动保存（仅在加载完成后）
   useEffect(() => {
-    saveManuscript(manuscript);
-  }, [manuscript]);
+    if (hydrated) saveManuscript(manuscript);
+  }, [manuscript, hydrated]);
   useEffect(() => {
-    saveChat(messages);
-  }, [messages]);
+    if (hydrated) saveChat(messages);
+  }, [messages, hydrated]);
   useEffect(() => {
-    saveProvider(provider);
-  }, [provider]);
+    if (hydrated) saveProvider(provider);
+  }, [provider, hydrated]);
+  useEffect(() => {
+    if (hydrated) saveAccessToken(accessToken);
+  }, [accessToken, hydrated]);
 
   const lastAssistantMessage = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -81,17 +102,42 @@ export default function Home() {
     setManuscript((prev) => ({ ...prev, content }));
   }
 
+  function handleNewWork() {
+    if (
+      !window.confirm(
+        "确定新建作品？当前的作品设定、正文与对话记录都将被清空，且无法恢复。"
+      )
+    ) {
+      return;
+    }
+    clearAll();
+    setSettings(DEFAULT_SETTINGS);
+    setManuscript(DEFAULT_MANUSCRIPT);
+    setMessages([]);
+    setProvider(DEFAULT_PROVIDER);
+    setActiveTab("settings");
+  }
+
   return (
     <div className="flex h-screen flex-col">
       {/* 顶栏 */}
       <header className="shrink-0 border-b border-[#e7e2d8] bg-[#fbfaf7] px-4 py-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h1 className="text-base font-semibold text-[#2b2a27]">
             小说创作工作台
           </h1>
-          <span className="max-w-[40%] truncate text-sm text-[#6b675f]">
-            {settings.title || "未命名作品"}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="max-w-[30%] truncate text-sm text-[#6b675f]">
+              {settings.title || "未命名作品"}
+            </span>
+            <button
+              className="btn !px-2.5 !py-1 text-xs"
+              onClick={handleNewWork}
+              title="清空设定、正文与对话，开始新作品"
+            >
+              新建作品
+            </button>
+          </div>
         </div>
       </header>
 
@@ -125,6 +171,8 @@ export default function Home() {
             settings={settings}
             onChange={setSettings}
             saveState={saveState}
+            accessToken={accessToken}
+            onAccessTokenChange={setAccessToken}
           />
         </section>
 
@@ -140,6 +188,7 @@ export default function Home() {
             onMessagesChange={setMessages}
             settings={settings}
             manuscript={manuscript}
+            accessToken={accessToken}
             onAppendToManuscript={appendAiToManuscript}
             onReplaceManuscript={replaceManuscriptWithAi}
           />

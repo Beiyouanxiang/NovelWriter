@@ -10,6 +10,7 @@ interface ChatPanelProps {
   onMessagesChange: (messages: ChatMessage[]) => void;
   settings: NovelSettings;
   manuscript: ManuscriptState;
+  accessToken: string;
   onAppendToManuscript: (content: string) => void;
   onReplaceManuscript: (content: string) => void;
 }
@@ -59,6 +60,7 @@ export default function ChatPanel({
   onMessagesChange,
   settings,
   manuscript,
+  accessToken,
   onAppendToManuscript,
   onReplaceManuscript,
 }: ChatPanelProps) {
@@ -96,9 +98,16 @@ export default function ChatPanel({
     setError(null);
 
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (accessToken) {
+        headers["X-Access-Token"] = accessToken;
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           provider,
           context: {

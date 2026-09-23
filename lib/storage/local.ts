@@ -15,6 +15,7 @@ export const STORAGE_KEYS = {
   manuscript: `${PREFIX}manuscript`,
   chat: `${PREFIX}chat`,
   provider: `${PREFIX}provider`,
+  accessToken: `${PREFIX}accessToken`,
 } as const;
 
 export const DEFAULT_SETTINGS: NovelSettings = {
@@ -110,6 +111,14 @@ export function loadProvider(): string {
 
 export function saveProvider(provider: string): void {
   write(STORAGE_KEYS.provider, provider);
+}
+
+export function loadAccessToken(): string {
+  return read<string>(STORAGE_KEYS.accessToken, "");
+}
+
+export function saveAccessToken(token: string): void {
+  write(STORAGE_KEYS.accessToken, token);
 }
 
 export function clearAll(): void {

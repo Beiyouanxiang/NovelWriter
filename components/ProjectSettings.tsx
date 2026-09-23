@@ -6,6 +6,8 @@ interface ProjectSettingsProps {
   settings: NovelSettings;
   onChange: (settings: NovelSettings) => void;
   saveState: "saved" | "saving" | "idle";
+  accessToken: string;
+  onAccessTokenChange: (token: string) => void;
 }
 
 const FIELDS: Array<{
@@ -65,6 +67,8 @@ export default function ProjectSettings({
   settings,
   onChange,
   saveState,
+  accessToken,
+  onAccessTokenChange,
 }: ProjectSettingsProps) {
   function update(key: keyof NovelSettings, value: string) {
     onChange({ ...settings, [key]: value });
@@ -105,6 +109,20 @@ export default function ProjectSettings({
             )}
           </div>
         ))}
+
+        <div className="border-t border-[#e7e2d8] pt-4">
+          <label className="field-label">服务端访问口令（可选）</label>
+          <input
+            className="field-input"
+            type="password"
+            value={accessToken}
+            placeholder="若服务端配置了 NOVEL_ACCESS_TOKEN，请填入相同口令"
+            onChange={(e) => onAccessTokenChange(e.target.value)}
+          />
+          <p className="mt-1 text-xs leading-relaxed text-[#b5ad9e]">
+            口令仅保存在本地浏览器，随每次请求发送到服务端校验，不会进入代码或日志。
+          </p>
+        </div>
       </div>
     </div>
   );
